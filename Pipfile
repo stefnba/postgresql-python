@@ -8,6 +8,8 @@ psycopg2 = "*"
 python-dotenv = "*"
 pydantic = "*"
 psycopg = {extras = ["binary"], version = "*"}
+pandas = "*"
+polars = "*"
 
 [dev-packages]
 black = "*"
