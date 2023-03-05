@@ -1,4 +1,4 @@
-from typing import TypedDict, Union
+from typing import Any, Dict, TypedDict, TypeVar, Union
 
 from pydantic import BaseModel
 
@@ -22,3 +22,9 @@ class ConnectionModel(BaseModel):
 
 
 ConnectionInfo = Union[str, ConnectionObject, ConnectionModel]
+
+ReturnModel = TypeVar("ReturnModel", bound=BaseModel)
+
+QueryParams = Dict[str, Any]
+QueryData = QueryParams
+DbRecord = QueryParams
