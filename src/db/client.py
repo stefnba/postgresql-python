@@ -7,13 +7,14 @@ from psycopg.cursor import Cursor
 from psycopg.rows import Row, RowFactory, class_row, dict_row
 from pydantic import BaseModel
 
+from db.record import PgRecord
 from db.types import (
     ConnectionInfo,
     ConnectionModel,
-    DbRecord,
+    DbDictRecord,
+    DbModelRecord,
     QueryData,
     QueryParams,
-    ReturnModel,
 )
 
 
@@ -73,6 +74,102 @@ class PgClient:
             conn.execute("SELECT 1")
             print("✅ Connection successful")
 
+    def find(self, query: Query, params: Optional[QueryParams] = None, filter=None):
+        """
+
+        Args:
+            query (Query): _description_
+            params (QueryParams): _description_
+            filter (): _description_
+
+        Returns:
+            _type_: _description_
+        """
+
+        if filter:
+            pass
+
+        cursor = self.run(query=query, params=params)
+        return PgRecord(cursor=cursor)
+
+    def update(
+        self,
+        data: QueryParams,
+        table: str,
+        filter=None,
+        returning: Optional[str | list[str]] = None,
+    ):
+        """
+
+        Args:
+            query (Query): _description_
+            params (QueryParams): _description_
+            filter (): _description_
+
+        Returns:
+            _type_: _description_
+        """
+
+        if isinstance(data, dict):
+            fields = data.keys()
+        elif isinstance(data, BaseModel):
+            fields = data.__fields__.keys()
+            data = data.dict()
+
+        query = sql.SQL("UPDATE INTO {table} ({fields}) VALUES ({values})").format(
+            table=sql.Identifier(table),
+            fields=sql.SQL(", ").join(map(sql.Identifier, fields)),
+            values=sql.SQL(", ").join(map(sql.Placeholder, fields)),
+        )
+
+        if filter:
+            pass
+
+        if returning:
+            pass
+
+        cursor = self.run(query=query, params=data)
+        return PgRecord(cursor=cursor)
+
+    def add(
+        self, data: QueryParams, table: str, returning: str | list[str], conflict: str
+    ):
+        """
+
+        Args:
+            query (Query): _description_
+            params (QueryParams): _description_
+            filter (): _description_
+
+        Returns:
+            _type_: _description_
+        """
+
+        if isinstance(data, dict):
+            fields = data.keys()
+        elif isinstance(data, BaseModel):
+            fields = data.__fields__.keys()
+            data = data.dict()
+
+        query = sql.SQL("INSERT INTO {table} ({fields}) VALUES ({values})").format(
+            table=sql.Identifier(table),
+            fields=sql.SQL(", ").join(map(sql.Identifier, fields)),
+            values=sql.SQL(", ").join(map(sql.Placeholder, fields)),
+        )
+
+        # returning
+        if returning:
+            returning_part = self.__construct_return_part(returning)
+            # concetenate query and returning_part
+            query = sql.SQL(" ").join([query, returning_part])
+
+        # conflict
+        if conflict:
+            pass
+
+        cursor = self.run(query=query, params=data)
+        return PgRecord(cursor=cursor)
+
     @overload
     def add_one(
         self,
@@ -90,7 +187,7 @@ class PgClient:
         table: str,
         returning: str | list[str],
         conflict: Optional[str] = None,
-    ) -> DbRecord:
+    ) -> DbDictRecord:
         ...
 
     @overload
@@ -98,30 +195,30 @@ class PgClient:
         self,
         data: QueryData | BaseModel,
         table: str,
-        returning: Type[ReturnModel],
+        returning: Type[DbModelRecord],
         conflict: Optional[str] = None,
-    ) -> ReturnModel:
+    ) -> DbModelRecord:
         ...
 
     def add_one(
         self,
         data: QueryData | BaseModel,
         table: str,
-        returning: Optional[str | list[str] | Type[ReturnModel]] = None,
+        returning: Optional[str | list[str] | Type[DbModelRecord]] = None,
         conflict: Optional[str] = None,
-    ) -> DbRecord | None | ReturnModel:
+    ) -> DbDictRecord | None | DbModelRecord:
         """
         Adds one record to the specified table.
 
         Args:
             data (QueryData): _description_
             table (str): _description_
-            returning (Optional[str  |  list[str]  |  Type[ReturnModel]], optional):
+            returning (Optional[str  |  list[str]  |  Type[DbModelRecord]], optional):
                 _description_. Defaults to None.
             conflict (Optional[str], optional): _description_. Defaults to None.
 
         Returns:
-            DbRecord | None | ReturnModel: _description_
+            DbDictRecord | None | DbModelRecord: _description_
         """
 
         if isinstance(data, dict):
@@ -162,13 +259,13 @@ class PgClient:
         return result
 
     def __construct_return_part(
-        self, returning: str | list[str] | Type[ReturnModel]
+        self, returning: str | list[str] | Type[DbModelRecord]
     ) -> sql.Composable:
         """
         Constructs RETURNING part of query
 
         Args:
-            returning (str | list[str] | Type[ReturnModel]): _description_
+            returning (str | list[str] | Type[DbModelRecord]): _description_
 
         Returns:
             sql.Composable: RETURNING part of query
@@ -252,7 +349,7 @@ class PgClient:
     @overload
     def find_one(
         self, query: Query, params: Optional[QueryParams] = None
-    ) -> DbRecord | None:
+    ) -> DbDictRecord | None:
         ...
 
     @overload
@@ -260,8 +357,8 @@ class PgClient:
         self,
         query: Query,
         params: Optional[QueryParams],
-        return_model: Type[ReturnModel],
-    ) -> ReturnModel | None:
+        return_model: Type[DbModelRecord],
+    ) -> DbModelRecord | None:
         ...
 
     @overload
@@ -270,16 +367,16 @@ class PgClient:
         query: Query,
         params: Optional[QueryParams] = ...,
         *,
-        return_model: Type[ReturnModel],
-    ) -> ReturnModel | None:
+        return_model: Type[DbModelRecord],
+    ) -> DbModelRecord | None:
         ...
 
     def find_one(
         self,
         query: Query,
         params: Optional[QueryParams] = None,
-        return_model: Type[ReturnModel] | None = None,
-    ) -> ReturnModel | DbRecord | None:
+        return_model: Type[DbModelRecord] | None = None,
+    ) -> DbModelRecord | DbDictRecord | None:
         """
         Retrieves and returns one record from the database.
         Connection and cursor is closed automatically.
@@ -315,8 +412,8 @@ class PgClient:
         self,
         query: Query,
         params: Optional[QueryParams],
-        return_model: Type[ReturnModel],
-    ) -> list[ReturnModel]:
+        return_model: Type[DbModelRecord],
+    ) -> list[DbModelRecord]:
         ...
 
     @overload
@@ -325,16 +422,16 @@ class PgClient:
         query: Query,
         params: Optional[QueryParams] = ...,
         *,
-        return_model: Type[ReturnModel],
-    ) -> list[ReturnModel]:
+        return_model: Type[DbModelRecord],
+    ) -> list[DbModelRecord]:
         ...
 
     def find_all(
         self,
         query: Query,
         params: Optional[QueryParams] = None,
-        return_model: Type[ReturnModel] | None = None,
-    ) -> list[ReturnModel] | list[QueryParams]:
+        return_model: Type[DbModelRecord] | None = None,
+    ) -> list[DbModelRecord] | list[QueryParams]:
         """
         Retrieves and returns one record from the database.
         Connection and cursor is closed automatically.

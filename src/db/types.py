@@ -23,8 +23,8 @@ class ConnectionModel(BaseModel):
 
 ConnectionInfo = Union[str, ConnectionObject, ConnectionModel]
 
-ReturnModel = TypeVar("ReturnModel", bound=BaseModel)
+DbModelRecord = TypeVar("DbModelRecord", bound=BaseModel)
 
 QueryParams = Dict[str, Any]
 QueryData = QueryParams
-DbRecord = QueryParams
+DbDictRecord = QueryParams

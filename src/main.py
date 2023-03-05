@@ -36,6 +36,11 @@ def main():
         }
     )
 
+    user = db.find("SELECT * FROM securities_types").get_all(SecuritiesTypes)
+    print(user)
+
+    return
+
     # def find_user() -> User:
     #     return db.find_one(query="SELECT * FROM securities_types")
 
