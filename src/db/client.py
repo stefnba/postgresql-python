@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Type, TypeVar, overload
+from typing import Optional, Type, overload
 
 import psycopg
 from psycopg import sql
@@ -7,13 +7,14 @@ from psycopg.cursor import Cursor
 from psycopg.rows import Row, RowFactory, class_row, dict_row
 from pydantic import BaseModel
 
-from db.types import ConnectionInfo, ConnectionModel
-
-ReturnModel = TypeVar("ReturnModel", bound=BaseModel)
-
-QueryParams = Dict[str, Any]
-QueryData = QueryParams
-DbRecord = QueryParams
+from db.types import (
+    ConnectionInfo,
+    ConnectionModel,
+    DbRecord,
+    QueryData,
+    QueryParams,
+    ReturnModel,
+)
 
 
 class User(BaseModel):
@@ -137,6 +138,7 @@ class PgClient:
 
         row_factory: RowFactory = dict_row
 
+        # returning
         if returning:
             returning_part = self.__construct_return_part(returning)
             if (
@@ -148,6 +150,7 @@ class PgClient:
             # concetenate query and returning_part
             query = sql.SQL(" ").join([query, returning_part])
 
+        # conflict
         if conflict:
             pass
 
@@ -210,18 +213,41 @@ class PgClient:
             return returning_part
         return sql.SQL("").format()
 
-    def update_one(
-        self, data: QueryData, table: str, returning: Optional[str] = None
-    ) -> None:
-        query = "INSERT INTO table VALUES"
+    def update_one(self, data: QueryData, table: str, returning: Optional[str] = None):
+        if isinstance(data, dict):
+            fields = data.keys()
+        elif isinstance(data, BaseModel):
+            fields = data.__fields__.keys()
+            data = data.dict()
 
+        query = sql.SQL("INSERT INTO {table} ({fields}) VALUES ({values})").format(
+            table=sql.Identifier(table),
+            fields=sql.SQL(", ").join(map(sql.Identifier, fields)),
+            values=sql.SQL(", ").join(map(sql.Placeholder, fields)),
+        )
+
+        row_factory: RowFactory = dict_row
+
+        # returning
         if returning:
-            query += " RETURNING *"
+            returning_part = self.__construct_return_part(returning)
+            if (
+                not isinstance(returning, str)
+                and not isinstance(returning, list)
+                and issubclass(returning, BaseModel)
+            ):
+                row_factory = class_row(returning)
+            # concetenate query and returning_part
+            query = sql.SQL(" ").join([query, returning_part])
 
-        print(query)
+        # filter
 
-        # cursor = self.run(query=query)
-        # cursor.close()
+        cursor = self.run(query=query, params=data, row_factory=row_factory)
+        result = None
+        if returning:
+            result = cursor.fetchone()
+        cursor.close()
+        return result
 
     @overload
     def find_one(
