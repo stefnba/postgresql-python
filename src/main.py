@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+# from db.client import PgClient
 from db.client import PgClient
 
 
@@ -25,6 +26,12 @@ class CurrenciesAdd(BaseModel):
     currency_name: str
 
 
+class CurrenciesUpdate(BaseModel):
+    id: str
+    updated_at: datetime | None
+    currency_name: str | None
+
+
 def main():
     db = PgClient(
         connection={
@@ -36,39 +43,38 @@ def main():
         }
     )
 
-    user = db.find("SELECT * FROM securities_types").get_all(SecuritiesTypes)
-    print(user)
+    db.find(
+        query="SELECT * from currencies",
+        # filters='WHERE "id" IS NULL'
+        filters=[
+            {"column": "id", "operator": "IN", "value": ["1"]},
+            {"column": "id", "operator": "EQUAL", "value": "1"},
+        ],
+    )
+
+    db.run("SELECT * FROM securities_types")
+    db.update(
+        data={"id": 123},
+        table="currencies",
+        filters=[
+            {"column": "id", "operator": "IN", "value": ["1"]},
+            {"column": "id", "operator": "EQUAL", "value": "1"},
+        ],
+        returning="*",
+    )
+    add = db.add(
+        data=[
+            {"id": "EEE", "currency_name": "name"},
+            {"currency_name": "name", "id": "DDD"},
+            {"id": "PPP", "currency_name": "name"},
+        ],
+        table="currencies",
+        conflict="d",
+        returning="*",
+    ).get_all()
+    print(add)
 
     return
-
-    # def find_user() -> User:
-    #     return db.find_one(query="SELECT * FROM securities_types")
-
-    user = db.find_one(
-        query="SELECT * FROM securities_types", return_model=SecuritiesTypes
-    )
-    if user:
-        # print(user.type)
-        pass
-
-    # find many
-    db.find_all(query="SELECT * FROM securities_types", return_model=SecuritiesTypes)
-    # print(types_aaa)
-
-    # run
-    run_manul = db.run("SELECT * FROM securities_types")
-    # print(run_manul.fetchone())
-    run_manul.close()
-
-    data = CurrenciesAdd(**{"id": "CHF", "currency_name": "US Dollar"})
-
-    # add
-    add = db.add_one(
-        data=data,
-        table="currencies",
-        returning=Currencies,
-    )
-    print(add)
 
 
 if __name__ == "__main__":

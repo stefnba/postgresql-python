@@ -1,6 +1,6 @@
 from typing import Any, Dict, Literal, Sequence, TypedDict, TypeVar, Union
 
-from psycopg import sql
+from psycopg.abc import Query
 from pydantic import BaseModel
 
 # create_model_from_typeddict
@@ -52,4 +52,8 @@ QueryData = QueryParams | BaseModel
 QueryDataMultiple = Sequence[BaseModel]
 
 DbDictRecord = QueryParams
-FilterParams = sql.Literal | list[FilterObject]
+FilterParams = Query | list[FilterObject]
+
+
+ReturningParams = str
+ConflictParams = str
