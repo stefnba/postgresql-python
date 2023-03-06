@@ -30,7 +30,7 @@ class QueryBase:
 
         conn: psycopg.Connection | None = None
 
-        print(self._query_as_string(query))
+        query_as_string = self._query_as_string(query)
 
         try:
             with psycopg.connect(self._conn_uri, row_factory=dict_row) as conn:
@@ -39,7 +39,7 @@ class QueryBase:
                 return PgRecord(cur)
 
         except psycopg.errors.UniqueViolation as error:
-            print("vioatl", error.sqlstate, error.pgresult)
+            print("vioatl", error.sqlstate, error.pgresult, query_as_string)
             raise
 
         finally:
