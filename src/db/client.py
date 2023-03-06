@@ -1,19 +1,21 @@
-from typing import Optional, Type, overload
+from typing import Iterable, Optional, Type, overload
 
 import psycopg
 from psycopg import sql
-from psycopg.abc import Query
+from psycopg.abc import Params, Query
 from psycopg.cursor import Cursor
-from psycopg.rows import Row, RowFactory, class_row, dict_row
+from psycopg.rows import Row, RowFactory, dict_row
 from pydantic import BaseModel
 
+from db.filter import construct_filter
 from db.record import PgRecord
 from db.types import (
     ConnectionInfo,
     ConnectionModel,
-    DbDictRecord,
     DbModelRecord,
+    FilterParams,
     QueryData,
+    QueryDataMultiple,
     QueryParams,
 )
 
@@ -74,6 +76,20 @@ class PgClient:
             conn.execute("SELECT 1")
             print("✅ Connection successful")
 
+    def run(self, query: Query, params: Optional[QueryParams] = None):
+        """
+        Ececute any query to the database.
+
+        Args:
+            query (Query): _description_
+            params (Optional[QueryParams], optional): _description_. Defaults to None.
+
+        Returns:
+            _type_: _description_
+        """
+        cursor = self._execute(query=query, params=params)
+        return PgRecord(cursor=cursor)
+
     def find(self, query: Query, params: Optional[QueryParams] = None, filter=None):
         """
 
@@ -89,14 +105,14 @@ class PgClient:
         if filter:
             pass
 
-        cursor = self.run(query=query, params=params)
+        cursor = self._execute(query=query, params=params)
         return PgRecord(cursor=cursor)
 
     def update(
         self,
-        data: QueryParams,
+        data: QueryData,
         table: str,
-        filter=None,
+        filter: FilterParams,
         returning: Optional[str | list[str]] = None,
     ):
         """
@@ -106,6 +122,21 @@ class PgClient:
             params (QueryParams): _description_
             filter (): _description_
 
+        UPDATE
+            "currencies" AS t
+        SET
+            "val" = v. "val",
+            "msg" = v. "msg"
+        FROM (
+            VALUES(1, 123, 'hello'),
+                (2,
+                    456,
+                    'world!')) AS v ("id",
+                "val",
+                "msg")
+        WHERE
+            v.id = t.id
+
         Returns:
             _type_: _description_
         """
@@ -113,26 +144,41 @@ class PgClient:
         if isinstance(data, dict):
             fields = data.keys()
         elif isinstance(data, BaseModel):
-            fields = data.__fields__.keys()
-            data = data.dict()
+            fields = data.dict(exclude_unset=True).keys()
+            data = data.dict(exclude_unset=True)
 
-        query = sql.SQL("UPDATE INTO {table} ({fields}) VALUES ({values})").format(
-            table=sql.Identifier(table),
-            fields=sql.SQL(", ").join(map(sql.Identifier, fields)),
-            values=sql.SQL(", ").join(map(sql.Placeholder, fields)),
+        # fields and values
+        set_part = sql.SQL(", ").join(
+            [
+                sql.SQL("{column}={value}").format(
+                    column=sql.Identifier(field), value=sql.Placeholder(field)
+                )
+                for field in fields
+            ]
         )
 
-        if filter:
-            pass
+        # filter
+        filter_part = self.__construct_filter_part(filter)
+
+        query = sql.SQL("UPDATE {table} SET {set_part}").format(
+            table=sql.Identifier(table), set_part=set_part
+        )
+        query = sql.SQL(" ").join([query, filter_part])
 
         if returning:
-            pass
+            returning_part = self.__construct_returning_part(returning)
+            # concetenate query and returning_part
+            query = sql.SQL(" ").join([query, returning_part])
 
-        cursor = self.run(query=query, params=data)
+        cursor = self._execute(query=query, params=data)
         return PgRecord(cursor=cursor)
 
     def add(
-        self, data: QueryParams, table: str, returning: str | list[str], conflict: str
+        self,
+        data: QueryData | QueryDataMultiple,
+        table: str,
+        returning: str | list[str],
+        conflict: Optional[str] = None,
     ):
         """
 
@@ -144,12 +190,23 @@ class PgClient:
         Returns:
             _type_: _description_
         """
+        fields: list[str] = []
+        data_record = None
+        data_records = None
+        is_multi = False
 
+        # single data record
         if isinstance(data, dict):
-            fields = data.keys()
+            fields = list(data.keys())
+            data_record = data
         elif isinstance(data, BaseModel):
-            fields = data.__fields__.keys()
-            data = data.dict()
+            fields = list(data.dict().keys())
+            data_record = data.dict()
+        # multiple data records
+        elif isinstance(data, list):
+            is_multi = True
+            fields = list(data[0].dict().keys())
+            data_records = [a.dict() for a in data]
 
         query = sql.SQL("INSERT INTO {table} ({fields}) VALUES ({values})").format(
             table=sql.Identifier(table),
@@ -159,106 +216,44 @@ class PgClient:
 
         # returning
         if returning:
-            returning_part = self.__construct_return_part(returning)
+            returning_part = self.__construct_returning_part(returning)
             # concetenate query and returning_part
             query = sql.SQL(" ").join([query, returning_part])
 
         # conflict
         if conflict:
-            pass
+            conflict_part = self.__construct_conflict_part(conflict)
+            query = sql.SQL(" ").join([query, conflict_part])
 
-        cursor = self.run(query=query, params=data)
+        if is_multi:
+            cursor = self._execute(query=query, params_seq=data_records)
+        else:
+            cursor = self._execute(query=query, params=data_record)
         return PgRecord(cursor=cursor)
 
-    @overload
-    def add_one(
-        self,
-        data: QueryData | BaseModel,
-        table: str,
-        *,
-        conflict: Optional[str] = None,
-    ) -> None:
-        ...
-
-    @overload
-    def add_one(
-        self,
-        data: QueryData | BaseModel,
-        table: str,
-        returning: str | list[str],
-        conflict: Optional[str] = None,
-    ) -> DbDictRecord:
-        ...
-
-    @overload
-    def add_one(
-        self,
-        data: QueryData | BaseModel,
-        table: str,
-        returning: Type[DbModelRecord],
-        conflict: Optional[str] = None,
-    ) -> DbModelRecord:
-        ...
-
-    def add_one(
-        self,
-        data: QueryData | BaseModel,
-        table: str,
-        returning: Optional[str | list[str] | Type[DbModelRecord]] = None,
-        conflict: Optional[str] = None,
-    ) -> DbDictRecord | None | DbModelRecord:
+    def __construct_conflict_part(self, conflict: str) -> sql.Composable:
         """
-        Adds one record to the specified table.
+        Constructs ON CONFLICT part of query
 
         Args:
-            data (QueryData): _description_
-            table (str): _description_
-            returning (Optional[str  |  list[str]  |  Type[DbModelRecord]], optional):
-                _description_. Defaults to None.
-            conflict (Optional[str], optional): _description_. Defaults to None.
+            conflict (str): _description_
 
         Returns:
-            DbDictRecord | None | DbModelRecord: _description_
+            sql.Composable: ON CONFLICT part of query
         """
+        conflict_part = sql.SQL("ON CONFLICT").format()
+        if isinstance(conflict, str):
+            conflict_part = sql.SQL(" ").join(
+                [
+                    conflict_part,
+                    sql.SQL("*"),
+                ]
+            )
+            return conflict_part
 
-        if isinstance(data, dict):
-            fields = data.keys()
-        elif isinstance(data, BaseModel):
-            fields = data.__fields__.keys()
-            data = data.dict()
+        return conflict_part
 
-        query = sql.SQL("INSERT INTO {table} ({fields}) VALUES ({values})").format(
-            table=sql.Identifier(table),
-            fields=sql.SQL(", ").join(map(sql.Identifier, fields)),
-            values=sql.SQL(", ").join(map(sql.Placeholder, fields)),
-        )
-
-        row_factory: RowFactory = dict_row
-
-        # returning
-        if returning:
-            returning_part = self.__construct_return_part(returning)
-            if (
-                not isinstance(returning, str)
-                and not isinstance(returning, list)
-                and issubclass(returning, BaseModel)
-            ):
-                row_factory = class_row(returning)
-            # concetenate query and returning_part
-            query = sql.SQL(" ").join([query, returning_part])
-
-        # conflict
-        if conflict:
-            pass
-
-        cursor = self.run(query=query, params=data, row_factory=row_factory)
-        result = None
-        if returning:
-            result = cursor.fetchone()
-        cursor.close()
-        return result
-
-    def __construct_return_part(
+    def __construct_returning_part(
         self, returning: str | list[str] | Type[DbModelRecord]
     ) -> sql.Composable:
         """
@@ -310,164 +305,61 @@ class PgClient:
             return returning_part
         return sql.SQL("").format()
 
-    def update_one(self, data: QueryData, table: str, returning: Optional[str] = None):
-        if isinstance(data, dict):
-            fields = data.keys()
-        elif isinstance(data, BaseModel):
-            fields = data.__fields__.keys()
-            data = data.dict()
+    def __construct_filter_part(self, filter: FilterParams) -> sql.Composable:
+        filter_part = sql.SQL("WHERE").format()
 
-        query = sql.SQL("INSERT INTO {table} ({fields}) VALUES ({values})").format(
-            table=sql.Identifier(table),
-            fields=sql.SQL(", ").join(map(sql.Identifier, fields)),
-            values=sql.SQL(", ").join(map(sql.Placeholder, fields)),
-        )
+        if isinstance(filter, str):
+            filter_part = sql.SQL(" ").join([filter_part, sql.Literal(filter)])
+            return filter_part
 
-        row_factory: RowFactory = dict_row
+        if isinstance(filter, list):
+            filter_part = sql.SQL(" ").join(
+                [
+                    filter_part,
+                    sql.SQL(" AND ").join(
+                        [
+                            construct_filter(f)
+                            # sql.SQL("{column}{operator}{value}").format(
+                            #     column=sql.Identifier(f["column"]),
+                            #     operator=sql.SQL("="),
+                            #     value=sql.Literal(f["value"]),
+                            # )
+                            for f in filter
+                        ]
+                    ),
+                ]
+            )
+            return filter_part
 
-        # returning
-        if returning:
-            returning_part = self.__construct_return_part(returning)
-            if (
-                not isinstance(returning, str)
-                and not isinstance(returning, list)
-                and issubclass(returning, BaseModel)
-            ):
-                row_factory = class_row(returning)
-            # concetenate query and returning_part
-            query = sql.SQL(" ").join([query, returning_part])
-
-        # filter
-
-        cursor = self.run(query=query, params=data, row_factory=row_factory)
-        result = None
-        if returning:
-            result = cursor.fetchone()
-        cursor.close()
-        return result
+        return filter_part
 
     @overload
-    def find_one(
-        self, query: Query, params: Optional[QueryParams] = None
-    ) -> DbDictRecord | None:
-        ...
-
-    @overload
-    def find_one(
+    def _execute(
         self,
         query: Query,
-        params: Optional[QueryParams],
-        return_model: Type[DbModelRecord],
-    ) -> DbModelRecord | None:
-        ...
-
-    @overload
-    def find_one(
-        self,
-        query: Query,
-        params: Optional[QueryParams] = ...,
+        params=None,
         *,
-        return_model: Type[DbModelRecord],
-    ) -> DbModelRecord | None:
-        ...
-
-    def find_one(
-        self,
-        query: Query,
-        params: Optional[QueryParams] = None,
-        return_model: Type[DbModelRecord] | None = None,
-    ) -> DbModelRecord | DbDictRecord | None:
-        """
-        Retrieves and returns one record from the database.
-        Connection and cursor is closed automatically.
-
-        Args:
-            query (Query): _description_
-            params (_type_, optional): _description_. Defaults to None.
-
-        Returns:
-            _type_: _description_
-        """
-
-        result = None
-
-        if return_model:
-            with self.run(
-                query=query, params=params, row_factory=class_row(return_model)
-            ) as cursor:
-                result = cursor.fetchone()
-            return result
-        with self.run(query=query, params=params) as cursor:
-            result = cursor.fetchone()
-        return result
-
-    @overload
-    def find_all(
-        self, query: Query, params: Optional[QueryParams] = None
-    ) -> list[dict]:
+        params_seq: Optional[Iterable[Params]] = None,
+    ) -> Cursor:
         ...
 
     @overload
-    def find_all(
+    def _execute(
         self,
         query: Query,
-        params: Optional[QueryParams],
-        return_model: Type[DbModelRecord],
-    ) -> list[DbModelRecord]:
-        ...
-
-    @overload
-    def find_all(
-        self,
-        query: Query,
-        params: Optional[QueryParams] = ...,
+        params=None,
         *,
-        return_model: Type[DbModelRecord],
-    ) -> list[DbModelRecord]:
-        ...
-
-    def find_all(
-        self,
-        query: Query,
-        params: Optional[QueryParams] = None,
-        return_model: Type[DbModelRecord] | None = None,
-    ) -> list[DbModelRecord] | list[QueryParams]:
-        """
-        Retrieves and returns one record from the database.
-        Connection and cursor is closed automatically.
-
-        Args:
-            query (Query): _description_
-            params (_type_, optional): _description_. Defaults to None.
-
-        Returns:
-            _type_: _description_
-        """
-
-        results = []
-
-        if return_model:
-            with self.run(
-                query=query, params=params, row_factory=class_row(return_model)
-            ) as cursor:
-                results = cursor.fetchall()
-            return results
-        with self.run(query=query, params=params) as cursor:
-            results = cursor.fetchall()
-        return results
-
-    @overload
-    def run(self, query: Query, params=None) -> Cursor:
-        ...
-
-    @overload
-    def run(
-        self, query: Query, params=None, *, row_factory: RowFactory[Row]
+        row_factory: RowFactory[Row],
+        params_seq: Optional[Iterable[Params]] = None,
     ) -> Cursor[Row]:
         ...
 
-    def run(
-        self, query: Query, params=None, row_factory: RowFactory[Row] | None = None
+    def _execute(
+        self,
+        query: Query,
+        params=None,
+        row_factory: RowFactory[Row] | None = None,
+        params_seq: Optional[Iterable[Params]] = None,
     ) -> Cursor[Row] | Cursor:
         """
         Executes a query to the database.
@@ -495,8 +387,16 @@ class PgClient:
                 elif isinstance(query, str):
                     _query = query
 
-                cur = conn.cursor()
                 print(_query)
+                cur = conn.cursor()
+
+                cur._query
+
+                # execute many for multiple add query
+                if params_seq:
+                    cur.executemany(query=query, params_seq=params_seq, returning=False)
+                    return cur
+
                 return cur.execute(query=query, params=params)
 
         except psycopg.errors.UniqueViolation as error:
